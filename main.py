@@ -47,7 +47,6 @@ def parse_table_data(text: str) -> List[Dict[str, Any]]:
     # Split text into lines but keep original lines for space checking
     all_lines = text.split('\n')
     lines = [line.strip() for line in all_lines if line.strip()]  # Cleaned lines for processing
-    
     # Create a mapping from cleaned line index to original line
     original_line_map = {}
     cleaned_idx = 0
@@ -55,156 +54,86 @@ def parse_table_data(text: str) -> List[Dict[str, Any]]:
         if orig_line.strip():  # Only if line has content after stripping
             original_line_map[cleaned_idx] = orig_idx
             cleaned_idx += 1
-    
     # Find table boundaries: starts with first A+6digits, ends at clear end markers
     table_start_idx = None
     table_end_idx = None
-    
+    # Only start parsing when a real item code (A+6digits) is found
     for i, line in enumerate(lines):
         line_stripped = line.strip()
-        
-        # Look for first line that is exactly A+6digits pattern
         if table_start_idx is None and re.match(r'^[A-Z]\d{6}$', line_stripped):
             table_start_idx = i
-            print(f"Found table start at line {i}: {line_stripped}")
             continue
-        
-        # After we found the start, look for first line that clearly indicates end of items
-        # (but skip empty lines and description/quantity/price lines that are part of items)
-        if table_start_idx is not None and line_stripped:
-            # Check if this could be an item code (A+6digits exactly)
-            if re.match(r'^[A-Z]\d{6}$', line_stripped):
-                continue  # This is another item, keep going
-            
-            # Check if this could be part of an item (description, quantity, unit, price)
-            # Skip lines that are likely part of item data
-            if (re.match(r'^[1-9]\d{0,2}$', line_stripped) or  # quantity
-                line_stripped.lower() == 'piece' or  # unit
-                re.search(r'\d+[,.]?\d*', line_stripped) or  # contains price-like numbers
-                len(line_stripped) > 10):  # long text (likely description)
-                continue
-            
-            # Look for clear end markers
+        if table_start_idx is not None:
             if any(keyword in line_stripped.lower() for keyword in 
                    ['subtotal', 'total', 'delivery', 'vat', 'payment', 'terms']):
                 table_end_idx = i
-                print(f"Found table end at line {i}: {line_stripped}")
                 break
-    
     if table_start_idx is None:
-        print("Warning: Could not find any item codes with A+6digits pattern")
-        return items
-    
+        return []
     if table_end_idx is None:
-        print("Warning: Could not find table end, processing to end of document")
         table_end_idx = len(lines)
-    
-    print(f"Processing table data from line {table_start_idx} to {table_end_idx - 1}")
-    
-    # Parse items starting from the first item code
     i = table_start_idx
     item_counter = 1
-    
-    # Parse each item by looking for item codes and collecting data until next item
     while i < table_end_idx and i < len(lines):
         try:
-            # Look for item code (A+6digits pattern)
             line_content = lines[i].strip()
-            
-            # Check if previous line was "O" (indicating this is an option item to skip)
             is_option = False
             if i > 0 and lines[i-1].strip() == 'O':
                 is_option = True
-            
-            # Find A+6digits pattern
             item_match = re.match(r'^[A-Z]\d{6}$', line_content)
             if not item_match:
                 i += 1
                 continue
-                
             item_code = item_match.group(0)
-            
-            # Skip option items
             if is_option:
                 i += 1
                 continue
             i += 1
-            
-            # Collect description lines using the trailing space rule
             description_lines = []
             quantity = None
-            
             while i < table_end_idx and i < len(lines):
-                line_stripped = lines[i]  # Already stripped
-                # Get original line for space checking
+                line_stripped = lines[i]
                 orig_line = all_lines[original_line_map[i]] if i in original_line_map else line_stripped
-                
-                # If we find another item code, we went too far
                 if re.match(r'^[A-Z]\d{6}$', line_stripped):
-                    i -= 1  # Back up one line
+                    i -= 1
                     break
-                
-                # Add this line to description
                 description_lines.append(line_stripped)
                 i += 1
-                
-                # If original line doesn't end with space, this is the last line of description
-                # The next line should be quantity
                 if not orig_line.endswith(' '):
-                    # Check if next line is quantity (handle various quantity formats)
                     if i < table_end_idx and i < len(lines):
-                        next_line = lines[i]  # Already stripped
-                        # Extract number from quantity line (handle "1", "4 pièce", "2 pieces", etc.)
+                        next_line = lines[i]
                         qty_match = re.search(r'^(\d+)', next_line)
                         if qty_match:
                             quantity = qty_match.group(1)
-                            i += 1  # Move past quantity
+                            i += 1
                     break
-            
             if not description_lines:
                 continue
-                
             if quantity is None:
                 continue
-                
             description = " ".join(description_lines)
-            
-            # Skip unit (should be "piece" or "pièce")
             if i < len(lines) and lines[i].strip().lower() in ["piece", "pièce"]:
                 i += 1
-            
-            # Get unit price
             if i >= len(lines):
                 continue
-                
             unit_price_raw = lines[i].strip()
             i += 1
-            
-            # Clean unit price: remove currency symbols, spaces, keep only numbers and decimal separators
-            unit_price = re.sub(r'[€$£¥₹¢¥₩₪₹₽]\s*', '', unit_price_raw)  # Remove common currency symbols
-            unit_price = re.sub(r'[^\d,.]', '', unit_price)  # Keep only digits, commas, and dots
-            
-            # Skip total price (next line)
+            unit_price = re.sub(r'[€$£¥₹¢¥₩₪₹₽]\s*', '', unit_price_raw)
+            unit_price = re.sub(r'[^\d,.]', '', unit_price)
             if i < len(lines):
                 i += 1
-            
-            # Validate unit price (should contain numbers)
             if not re.search(r'\d', unit_price):
                 continue
-            
             item = {
                 "Item": item_code,
                 "Description": description,
                 "Quantity": quantity,
-                "UnitPrice": unit_price  # Keep original format with comma for decimals
+                "UnitPrice": unit_price
             }
-            
             items.append(item)
             item_counter += 1
-            
         except (IndexError, AttributeError) as e:
             i += 1
-    
     return items
 
 
@@ -220,30 +149,20 @@ def extract_table_with_pymupdf_tables(pdf_path: str) -> List[Dict[str, Any]]:
         doc = fitz.open(pdf_path)
         items = []
         item_counter = 1
-        
         for page_num in range(len(doc)):
             page = doc.load_page(page_num)
-            
-            # Try to find tables on the page
             tables = page.find_tables()
-            
             for table in tables:
                 table_data = table.extract()
-                
-                # Look for header row
                 header_row = None
                 data_start_idx = 0
-                
                 for i, row in enumerate(table_data):
                     if any('item' in str(cell).lower() for cell in row if cell):
                         header_row = [str(cell).lower() if cell else '' for cell in row]
                         data_start_idx = i + 1
                         break
-                
-                # If we found a header, map columns
                 if header_row:
                     item_col = description_col = qty_col = price_col = -1
-                    
                     for j, header in enumerate(header_row):
                         if 'item' in header or 'product' in header:
                             item_col = j
@@ -253,20 +172,18 @@ def extract_table_with_pymupdf_tables(pdf_path: str) -> List[Dict[str, Any]]:
                             qty_col = j
                         elif 'price' in header or 'unit' in header:
                             price_col = j
-                
-                # Extract data rows
                 for row in table_data[data_start_idx:]:
-                    if not any(cell for cell in row):  # Skip empty rows
+                    if not any(cell for cell in row):
                         continue
-                    
                     row_str = [str(cell) if cell else '' for cell in row]
-                    
-                    # Skip total/subtotal rows
-                    if any('total' in cell.lower() for cell in row_str):
+                    # Only keep rows that have at least two non-empty fields (likely real items)
+                    non_empty_fields = sum(1 for v in row_str if v.strip())
+                    if non_empty_fields < 2:
                         continue
-                    
+                    # Skip rows that look like headers or metadata
+                    if any(keyword in row_str[0].lower() for keyword in ['offre', 'référence', 'client', 'identification', 'date', 'conditions', 'consultant', 'meetingroom']):
+                        continue
                     if header_row and all(col >= 0 for col in [item_col, description_col, qty_col, price_col]):
-                        # Use column mapping
                         item = {
                             "item_id": f"Item{item_counter}",
                             "Item": row_str[item_col] if item_col < len(row_str) else "",
@@ -275,7 +192,6 @@ def extract_table_with_pymupdf_tables(pdf_path: str) -> List[Dict[str, Any]]:
                             "UnitPrice": row_str[price_col] if price_col < len(row_str) else ""
                         }
                     else:
-                        # Fallback to positional parsing
                         item = {
                             "item_id": f"Item{item_counter}",
                             "Item": row_str[0] if len(row_str) > 0 else "",
@@ -283,14 +199,12 @@ def extract_table_with_pymupdf_tables(pdf_path: str) -> List[Dict[str, Any]]:
                             "Quantity": row_str[2] if len(row_str) > 2 else "",
                             "UnitPrice": row_str[3] if len(row_str) > 3 else ""
                         }
-                    
-                    if any(item[key] for key in ["Item", "Description", "Quantity", "UnitPrice"]):
+                    # Only add if at least quantity or price is present
+                    if item["Quantity"].strip() or item["UnitPrice"].strip():
                         items.append(item)
                         item_counter += 1
-        
         doc.close()
         return items
-        
     except Exception as e:
         print(f"Warning: Table detection failed: {e}")
         return []
@@ -321,14 +235,16 @@ def main():
     print(f"Output will be saved to: {output_path}")
     
     items = []
-    
+    used_table_method = False
     # Try table detection method first
     if args.method in ['table', 'both']:
         print("Attempting table detection...")
         items = extract_table_with_pymupdf_tables(args.input_pdf)
-    
+        used_table_method = True
     # If table detection didn't work or we want text parsing
     if (not items and args.method in ['text', 'both']) or args.method == 'text':
+        if used_table_method and not items:
+            print("Table detection did not find any real items, falling back to text parsing...")
         print("Using text parsing method...")
         text = extract_text_from_pdf(args.input_pdf)
         items = parse_table_data(text)
