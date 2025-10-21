@@ -9,6 +9,7 @@ import argparse
 import json
 import re
 import sys
+import unicodedata
 from pathlib import Path
 from typing import List, Dict, Any
 
@@ -17,6 +18,36 @@ try:
 except ImportError:
     print("Error: PyMuPDF is not installed. Please install it with: pip install PyMuPDF")
     sys.exit(1)
+
+
+def clean_text(text: str) -> str:
+    """
+    Clean text by removing or replacing problematic characters.
+    Handles encoding issues and special characters.
+    """
+    if not text:
+        return text
+    
+    # Replace non-breaking spaces with regular spaces
+    text = text.replace('\xa0', ' ')
+    
+    # Fix common encoding issues
+    text = text.replace('Θ', 'é')  # Theta -> é
+    text = text.replace('Γ', 'â')  # Gamma -> â
+    text = text.replace('π', 'è')  # Pi -> è
+    text = text.replace('Φ', 'è')  # Phi -> è
+    text = text.replace('Ω', 'é')  # Omega -> é
+    
+    # Normalize unicode characters
+    text = unicodedata.normalize('NFKC', text)
+    
+    # Clean up multiple spaces
+    text = re.sub(r'\s+', ' ', text)
+    
+    # Strip leading/trailing whitespace
+    text = text.strip()
+    
+    return text
 
 
 def extract_text_from_pdf(pdf_path: str) -> str:
@@ -109,12 +140,12 @@ def parse_table_data(text: str) -> List[Dict[str, Any]]:
                     quantity = "1"
                 else:
                     continue
-            description = " ".join(description_lines)
+            description = clean_text(" ".join(description_lines))
             if i < len(lines) and lines[i].strip().lower() in ["piece", "pièce"]:
                 i += 1
             if i >= len(lines):
                 continue
-            unit_price_raw = lines[i].strip()
+            unit_price_raw = clean_text(lines[i].strip())
             i += 1
             unit_price = re.sub(r'[€$£¥₹¢¥₩₪₹₽]\s*', '', unit_price_raw)
             unit_price = re.sub(r'[^\d,.]', '', unit_price)
