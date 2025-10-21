@@ -39,8 +39,9 @@ def extract_text_from_pdf(pdf_path: str) -> str:
 def parse_table_data(text: str) -> List[Dict[str, Any]]:
     """
     Parse table data from extracted text.
-    Looks for items with A+6digit codes and extracts Item, Description, Quantity, UnitPrice.
+    Looks for items with A+6digit codes or 4digit codes and extracts Item, Description, Quantity, UnitPrice.
     Handles multi-line descriptions using trailing space detection.
+    Goes through the entire document looking for item codes (A+6digits or 4digits).
     """
     items = []
     
@@ -54,33 +55,17 @@ def parse_table_data(text: str) -> List[Dict[str, Any]]:
         if orig_line.strip():  # Only if line has content after stripping
             original_line_map[cleaned_idx] = orig_idx
             cleaned_idx += 1
-    # Find table boundaries: starts with first A+6digits, ends at clear end markers
-    table_start_idx = None
-    table_end_idx = None
-    # Only start parsing when a real item code (A+6digits) is found
-    for i, line in enumerate(lines):
-        line_stripped = line.strip()
-        if table_start_idx is None and re.match(r'^[A-Z]\d{6}$', line_stripped):
-            table_start_idx = i
-            continue
-        if table_start_idx is not None:
-            if any(keyword in line_stripped.lower() for keyword in 
-                   ['subtotal', 'total', 'delivery', 'vat', 'payment', 'terms']):
-                table_end_idx = i
-                break
-    if table_start_idx is None:
-        return []
-    if table_end_idx is None:
-        table_end_idx = len(lines)
-    i = table_start_idx
+    
+    # Process the entire document, looking for A+6digit codes
+    i = 0
     item_counter = 1
-    while i < table_end_idx and i < len(lines):
+    while i < len(lines):
         try:
             line_content = lines[i].strip()
             is_option = False
             if i > 0 and lines[i-1].strip() == 'O':
                 is_option = True
-            item_match = re.match(r'^[A-Z]\d{6}$', line_content)
+            item_match = re.match(r'^([A-Z]\d{6}|\d{4})$', line_content)
             if not item_match:
                 i += 1
                 continue
@@ -91,16 +76,16 @@ def parse_table_data(text: str) -> List[Dict[str, Any]]:
             i += 1
             description_lines = []
             quantity = None
-            while i < table_end_idx and i < len(lines):
+            while i < len(lines):
                 line_stripped = lines[i]
                 orig_line = all_lines[original_line_map[i]] if i in original_line_map else line_stripped
-                if re.match(r'^[A-Z]\d{6}$', line_stripped):
+                if re.match(r'^([A-Z]\d{6}|\d{4})$', line_stripped):
                     i -= 1
                     break
                 description_lines.append(line_stripped)
                 i += 1
                 if not orig_line.endswith(' '):
-                    if i < table_end_idx and i < len(lines):
+                    if i < len(lines):
                         next_line = lines[i]
                         qty_match = re.search(r'^(\d+)', next_line)
                         if qty_match:
@@ -234,6 +219,18 @@ def main():
     print(f"Extracting data from: {args.input_pdf}")
     print(f"Output will be saved to: {output_path}")
     
+    # Extract text first and save it for debugging
+    text = extract_text_from_pdf(args.input_pdf)
+    
+    # Save raw text file for debugging
+    text_output_path = Path(output_path).with_suffix('.txt')
+    try:
+        with open(text_output_path, 'w', encoding='utf-8') as f:
+            f.write(text)
+        print(f"Raw text saved to: {text_output_path}")
+    except Exception as e:
+        print(f"Warning: Could not save raw text file: {e}")
+    
     items = []
     used_table_method = False
     # Try table detection method first
@@ -246,7 +243,6 @@ def main():
         if used_table_method and not items:
             print("Table detection did not find any real items, falling back to text parsing...")
         print("Using text parsing method...")
-        text = extract_text_from_pdf(args.input_pdf)
         items = parse_table_data(text)
     
     if not items:
