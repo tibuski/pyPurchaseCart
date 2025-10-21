@@ -9,14 +9,21 @@ import argparse
 import json
 import re
 import sys
+import time
 import unicodedata
 from pathlib import Path
 from typing import List, Dict, Any
 
 try:
     import fitz  # PyMuPDF
+    PYMUPDF_AVAILABLE = True
 except ImportError:
-    print("Error: PyMuPDF is not installed. Please install it with: pip install PyMuPDF")
+    PYMUPDF_AVAILABLE = False
+
+try:
+    import tkinter as tk
+except ImportError:
+    print("Error: tkinter is not available. This is unusual for Windows Python installations.")
     sys.exit(1)
 
 
@@ -48,6 +55,83 @@ def clean_text(text: str) -> str:
     text = text.strip()
     
     return text
+
+
+def copy_to_clipboard(text: str) -> None:
+    """
+    Copy text to Windows clipboard using tkinter.
+    """
+    try:
+        root = tk.Tk()
+        root.withdraw()  # Hide the tkinter window
+        root.clipboard_clear()
+        root.clipboard_append(text)
+        root.update()  # Needed to finalize clipboard operation
+        root.destroy()
+    except Exception as e:
+        print(f"Error copying to clipboard: {e}")
+
+
+def populate_clipboard_from_json(json_path: str, delay: float = 2.0, limit: int = None) -> None:
+    """
+    Read JSON file and populate clipboard with item details one by one.
+    Each clipboard entry contains: Description, Quantity, UnitPrice
+    
+    Args:
+        json_path: Path to the JSON file
+        delay: Delay in seconds between clipboard entries
+        limit: Maximum number of items to process (None for all items)
+    """
+    try:
+        with open(json_path, 'r', encoding='utf-8') as f:
+            data = json.load(f)
+    except Exception as e:
+        print(f"Error reading JSON file: {e}")
+        return
+    
+    if not data:
+        print("No data found in JSON file.")
+        return
+    
+    items_to_process = list(data.items())
+    if limit:
+        items_to_process = items_to_process[:limit]
+        print(f"Found {len(data)} items in JSON file. Processing first {len(items_to_process)} items.")
+    else:
+        print(f"Found {len(data)} items in JSON file.")
+    
+    print(f"Will copy each item to clipboard with {delay} second delay.")
+    print("Press Ctrl+C to stop at any time.\n")
+    
+    try:
+        for i, (item_key, item_data) in enumerate(items_to_process, 1):
+            description = item_data.get('Description', 'N/A')
+            quantity = item_data.get('Quantity', 'N/A')
+            unit_price = item_data.get('UnitPrice', 'N/A')
+            
+            # Format the clipboard text - values only in correct order
+            clipboard_text = f"{description}\n{quantity}\n{unit_price}"
+            
+            # Copy to clipboard
+            copy_to_clipboard(clipboard_text)
+            
+            total_items = limit if limit else len(data)
+            print(f"[{i}/{total_items}] Copied to clipboard: {item_key}")
+            print(f"  Description: {description[:50]}{'...' if len(description) > 50 else ''}")
+            print(f"  Quantity: {quantity}")
+            print(f"  Unit Price: {unit_price}")
+            print()
+            
+            # Wait before next item (except for the last one)
+            if i < len(items_to_process):
+                time.sleep(delay)
+                
+    except KeyboardInterrupt:
+        print("\nOperation cancelled by user.")
+    except Exception as e:
+        print(f"Error during clipboard operation: {e}")
+    
+    print("Clipboard population completed.")
 
 
 def extract_text_from_pdf(pdf_path: str) -> str:
@@ -240,31 +324,110 @@ def extract_table_with_pymupdf_tables(pdf_path: str) -> List[Dict[str, Any]]:
 
 
 def main():
-    parser = argparse.ArgumentParser(description='Extract table data from PDF and output as JSON')
-    parser.add_argument('input_pdf', help='Path to input PDF file')
+    parser = argparse.ArgumentParser(description='Extract table data from PDF and output as JSON, or populate clipboard from JSON')
+    parser.add_argument('input_file', help='Path to input PDF file (for extraction) or JSON file (for clipboard)')
     parser.add_argument('-o', '--output', help='Output JSON file path (default: same name as input with .json extension)')
     parser.add_argument('--method', choices=['text', 'table', 'both'], default='both',
                        help='Extraction method: text parsing, table detection, or both (default: both)')
+    parser.add_argument('--clipboard', action='store_true',
+                       help='Populate clipboard from JSON file (or extract from PDF first if needed)')
+    parser.add_argument('--delay', type=float, default=2.0,
+                       help='Delay in seconds between clipboard entries (default: 2.0)')
+    parser.add_argument('--limit', type=int, 
+                       help='Limit number of items to copy to clipboard (useful for testing)')
     
     args = parser.parse_args()
     
-    # Validate input file
-    if not Path(args.input_pdf).exists():
-        print(f"Error: Input file '{args.input_pdf}' does not exist.")
+    # Handle clipboard mode
+    if args.clipboard:
+        # Check if input file exists
+        if not Path(args.input_file).exists():
+            print(f"Error: Input file '{args.input_file}' does not exist.")
+            sys.exit(1)
+        
+        json_file = None
+        
+        if args.input_file.lower().endswith('.json'):
+            # Direct JSON file input
+            json_file = args.input_file
+        elif args.input_file.lower().endswith('.pdf'):
+            # PDF file input - look for corresponding JSON file or create it
+            input_path = Path(args.input_file)
+            json_file = str(input_path.with_suffix('.json'))
+            
+            if not Path(json_file).exists():
+                print(f"JSON file '{json_file}' not found. Extracting data from PDF first...")
+                
+                # Check PyMuPDF availability for PDF extraction
+                if not PYMUPDF_AVAILABLE:
+                    print("Error: PyMuPDF is not installed. Please install it with: pip install PyMuPDF")
+                    print("PyMuPDF is required to extract data from PDF files.")
+                    sys.exit(1)
+                
+                # Extract data from PDF and create JSON file
+                text = extract_text_from_pdf(args.input_file)
+                
+                items = []
+                # Try table detection method first
+                print("Attempting table detection...")
+                items = extract_table_with_pymupdf_tables(args.input_file)
+                
+                # If table detection didn't work, use text parsing
+                if not items:
+                    print("Table detection did not find any items, falling back to text parsing...")
+                    items = parse_table_data(text)
+                
+                if not items:
+                    print("Error: No table data found in the PDF.")
+                    sys.exit(1)
+                
+                # Create output JSON structure
+                output_data = {}
+                for item in items:
+                    item_id = item.pop('item_id', f'Item{len(output_data) + 1}')
+                    output_data[item_id] = item
+                
+                # Save to JSON file
+                try:
+                    with open(json_file, 'w', encoding='utf-8') as f:
+                        json.dump(output_data, f, indent=2, ensure_ascii=False)
+                    print(f"Successfully extracted {len(items)} items and saved to {json_file}")
+                except Exception as e:
+                    print(f"Error saving JSON file: {e}")
+                    sys.exit(1)
+            else:
+                print(f"Found existing JSON file: {json_file}")
+        else:
+            print(f"Error: Input file must be a PDF or JSON file. Got: {args.input_file}")
+            sys.exit(1)
+        
+        print(f"Populating clipboard from: {json_file}")
+        populate_clipboard_from_json(json_file, args.delay, args.limit)
+        return
+    
+    # Check PyMuPDF availability for PDF extraction mode
+    if not PYMUPDF_AVAILABLE:
+        print("Error: PyMuPDF is not installed. Please install it with: pip install PyMuPDF")
+        print("Note: PyMuPDF is only required for PDF extraction, not for clipboard operations.")
+        sys.exit(1)
+    
+    # Validate input PDF file for extraction mode
+    if not Path(args.input_file).exists():
+        print(f"Error: Input file '{args.input_file}' does not exist.")
         sys.exit(1)
     
     # Determine output file path
     if args.output:
         output_path = args.output
     else:
-        input_path = Path(args.input_pdf)
+        input_path = Path(args.input_file)
         output_path = input_path.with_suffix('.json')
     
-    print(f"Extracting data from: {args.input_pdf}")
+    print(f"Extracting data from: {args.input_file}")
     print(f"Output will be saved to: {output_path}")
     
     # Extract text first and save it for debugging
-    text = extract_text_from_pdf(args.input_pdf)
+    text = extract_text_from_pdf(args.input_file)
     
     # Save raw text file for debugging
     text_output_path = Path(output_path).with_suffix('.txt')
@@ -280,7 +443,7 @@ def main():
     # Try table detection method first
     if args.method in ['table', 'both']:
         print("Attempting table detection...")
-        items = extract_table_with_pymupdf_tables(args.input_pdf)
+        items = extract_table_with_pymupdf_tables(args.input_file)
         used_table_method = True
     # If table detection didn't work or we want text parsing
     if (not items and args.method in ['text', 'both']) or args.method == 'text':
