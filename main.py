@@ -74,6 +74,8 @@ def parse_table_data(text: str) -> List[Dict[str, Any]]:
                 i += 1
                 continue
             item_code = item_match.group(1)
+            
+
             if is_option:
                 i += 1
                 continue
@@ -92,15 +94,21 @@ def parse_table_data(text: str) -> List[Dict[str, Any]]:
                 if not orig_line.endswith(' '):
                     if i < len(lines):
                         next_line = lines[i]
+                        # Look for quantity patterns - handle encoding issues with pièce
                         qty_match = re.search(r'^(\d+)', next_line)
-                        if qty_match:
+                        if qty_match and ('pi' in next_line.lower() or 'piece' in next_line.lower() or re.match(r'^\d+\s*$', next_line)):
                             quantity = qty_match.group(1)
                             i += 1
                     break
             if not description_lines:
+                print(f"DEBUG: Skipping {item_code} - no description lines")
                 continue
             if quantity is None:
-                continue
+                # For 4-digit codes, assume quantity = 1 if not found explicitly
+                if re.match(r'^\d{4}$', item_code):
+                    quantity = "1"
+                else:
+                    continue
             description = " ".join(description_lines)
             if i < len(lines) and lines[i].strip().lower() in ["piece", "pièce"]:
                 i += 1
