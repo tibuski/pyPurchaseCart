@@ -65,11 +65,15 @@ def parse_table_data(text: str) -> List[Dict[str, Any]]:
             is_option = False
             if i > 0 and lines[i-1].strip() == 'O':
                 is_option = True
+            # Try exact match first (A+6digits or standalone 4digits)
             item_match = re.match(r'^([A-Z]\d{6}|\d{4})$', line_content)
+            # If no exact match, try 4digits at start of line (more flexible)
+            if not item_match:
+                item_match = re.match(r'^(\d{4})(?:\s|$)', line_content)
             if not item_match:
                 i += 1
                 continue
-            item_code = item_match.group(0)
+            item_code = item_match.group(1)
             if is_option:
                 i += 1
                 continue
@@ -79,7 +83,8 @@ def parse_table_data(text: str) -> List[Dict[str, Any]]:
             while i < len(lines):
                 line_stripped = lines[i]
                 orig_line = all_lines[original_line_map[i]] if i in original_line_map else line_stripped
-                if re.match(r'^([A-Z]\d{6}|\d{4})$', line_stripped):
+                # Check for next item code (A+6digits exactly, or 4digits at start of line)
+                if re.match(r'^([A-Z]\d{6}|\d{4})$', line_stripped) or re.match(r'^(\d{4})(?:\s|$)', line_stripped):
                     i -= 1
                     break
                 description_lines.append(line_stripped)
