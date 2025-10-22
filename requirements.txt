@@ -1,0 +1,10 @@
+# PDF Processing
+PyMuPDF>=1.23.0
+
+# Standard libraries (included with Python)
+# argparse - Command line argument parsing
+# json - JSON handling
+# re - Regular expressions
+# sys - System-specific parameters
+# pathlib - Object-oriented filesystem paths
+# typing - Type hints
